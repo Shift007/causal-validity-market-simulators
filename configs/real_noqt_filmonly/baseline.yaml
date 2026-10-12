@@ -1,0 +1,171 @@
+# configs/real_noqt_filmonly/baseline.yaml
+# Real panel without the quantile transform. Temporal diffusion model (the Raw ablation).
+#
+# This file sets the folders, the data definition and the walk-forward schedule.
+# Model and training hyper-parameters are command-line flags: see docs/REPRODUCE.md.
+paths:
+  checkpoints_dir: "checkpoints/real_noqt_filmonly"
+  processed_dir:   "processed_data/real_noqt"          # SHARED QT-bypass artifacts
+  results_dir:     "results/real_noqt_filmonly"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DIFFUSION — temporal (symmetric) encoder: l'headline model
+# ══════════════════════════════════════════════════════════════════════════════
+diffusion:
+  macro_encoder: "symmetric"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 00. SYNTHETIC DGP — disabled
+# ══════════════════════════════════════════════════════════════════════════════
+synthetic_dgp:
+  use_synthetic: false
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 01. DATA INGESTION (identico a configs/real/baseline.yaml + noqt.yaml)
+# ══════════════════════════════════════════════════════════════════════════════
+data_ingestion:
+  start_date:       "2000-05-01"
+  end_date:         "2024-12-31"
+  train_split_date: "2014-12-31"
+  fred_api_key:     ""   # read from the FRED_API_KEY environment variable
+
+  tickers:
+    - "CL=F"
+    - "GC=F"
+    - "SI=F"
+    - "ES=F"
+    - "NQ=F"
+    - "^BVSP"
+    - "^HSI"
+    - "^N225"
+    - "^SSMI"
+    - "^AXJO"
+    - "^FTSE"
+    - "^GDAXI"
+    - "ZN=F"
+    - "XBB.TO"
+
+  macro_vars:
+    GDPC1:                "US Real GDP (quarterly)"
+    INDPRO:               "US Industrial Production (monthly)"
+    RSAFS:                "US Retail Sales (monthly)"
+    CPIAUCSL:             "US CPI (monthly)"
+    PPIACO:               "US PPI All Commodities (monthly)"
+    M2SL:                 "US M2 Money Stock (monthly)"
+    CLVMNACSCAB1GQEA19:   "EU Real GDP (quarterly)"
+    EA19PRINTO01IXOBSAM:  "EU Industrial Production (monthly)"
+    EA19SLRTTO01GPSAM:    "EU Retail Sales (monthly, growth%)"
+    CP0000EZ19M086NEST:   "EU HICP CPI (monthly)"
+    MABMM301EZM657S:      "EU M3 Broad Money growth (monthly)"
+    XTEXVA01CNM667S:      "CN Exports growth (monthly, GDP proxy)"
+    CHNPRINTO01IXPYM:     "CN Industrial Production YoY% (monthly)"
+    CHNSLRTTO02MLM:       "CN Retail Sales (monthly)"
+    CHNCPIALLMINMEI:      "CN CPI (monthly)"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 02. PREPROCESSING — KEY: target_distribution.mode = "none"  (QT disabilitato)
+# ══════════════════════════════════════════════════════════════════════════════
+preprocessing:
+  window_length:    64
+  target_length:    32
+  macro_context_len: 126
+  stride: 1
+
+  instance_scaling:
+    c:         3.0
+    mad_floor: 1.0e-4
+    z_clip:    10.0
+
+  target_distribution:
+    mode: "none"                          # ABLATION: QT disabilitato
+    strict_artifact_validation: false     # bypass classifier (non c'è QT)
+
+  wavelet:
+    type:  "haar"
+    level: 4
+
+  macro_scaling:
+    method:      "expanding_robust_tanh"
+    tanh_c:      6.0
+    min_periods: 20
+
+    stationarity_transforms:
+      GDPC1:                "yoy_log_diff"
+      INDPRO:               "yoy_log_diff"
+      RSAFS:                "yoy_log_diff"
+      CPIAUCSL:             "yoy_log_diff"
+      PPIACO:               "yoy_log_diff"
+      M2SL:                 "yoy_log_diff"
+      CLVMNACSCAB1GQEA19:   "yoy_log_diff"
+      EA19PRINTO01IXOBSAM:  "yoy_log_diff"
+      EA19SLRTTO01GPSAM:    "already_growth"
+      CP0000EZ19M086NEST:   "yoy_log_diff"
+      MABMM301EZM657S:      "already_growth"
+      XTEXVA01CNM667S:      "already_growth"
+      CHNPRINTO01IXPYM:     "already_growth"
+      CHNSLRTTO02MLM:       "yoy_log_diff"
+      CHNCPIALLMINMEI:      "yoy_log_diff"
+
+    engineered_features: {}
+
+  target_features:
+    - "log_returns"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 03. WALK-FORWARD SCHEDULE (identico al baseline real)
+# ══════════════════════════════════════════════════════════════════════════════
+training:
+  walk_forward:
+    initial_split_date:  "2014-12-31"
+    evaluation_end_date: "2024-12-31"
+    step_freq:           "A"
+    warmup_epochs:       100
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 05. WF EVAL
+# ══════════════════════════════════════════════════════════════════════════════
+analysis:
+  num_samples:      8
+  guidance_scale:   1.0
+  ddim_steps:       50
+  batch_size:       256
+  max_eval_windows: 200
+
+  metrics:
+    lags: 10
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 06. COUNTERFACTUAL (non usato in questa ablation distribuzionale, ma coerente)
+# ══════════════════════════════════════════════════════════════════════════════
+counterfactual_generation:
+  ddim_steps:             50
+  ddim_eta:               0.0
+  guidance_scale:         1.0
+  sgd_gamma:              1.0
+  latent_preserving:      true
+  covariance_propagation: true
+
+  cpi_sweep:
+    target_year_range:  [2015, 2024]
+    target_year:        2022
+    focus_assets:       ["ES=F", "ZN=F"]
+    cpi_variable_index: 3
+    shock_levels: [-0.01, -0.02, -0.03, -0.04, -0.05, -0.06]
+    shock_labels: ["-1 ppt", "-2 ppt", "-3 ppt", "-4 ppt", "-5 ppt", "-6 ppt"]
+
+  custom_scenarios:
+    enabled: false
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 07. GENERATION
+# ══════════════════════════════════════════════════════════════════════════════
+generation:
+  max_runs_per_task: 3

@@ -1,0 +1,231 @@
+# configs/real_filmonly/baseline.yaml
+# Real panel (14 assets, FRED macro series). Temporal diffusion model.
+#
+# This file sets the folders, the data definition and the walk-forward schedule.
+# Model and training hyper-parameters are command-line flags: see docs/REPRODUCE.md.
+paths:
+  checkpoints_dir: "checkpoints/real_filmonly"
+  processed_dir:   "processed_data/real"
+  results_dir:     "results/real_filmonly"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 00. SYNTHETIC DGP — disabled for real-data run
+# ══════════════════════════════════════════════════════════════════════════════
+synthetic_dgp:
+  use_synthetic: false
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 01. DATA INGESTION
+# Date range: paper-aligned (2000-05-01 → 2024-12-31). Effective dataset start
+# is bounded by the latest-starting ticker (ZN=F: 2000-09-21), so the
+# usable calendar begins ~Sept 2000.
+# Train split 2014-12-31 → ~14 yr train / 10 yr OOS (2015–2024).
+# ══════════════════════════════════════════════════════════════════════════════
+data_ingestion:
+  start_date:       "2000-05-01"
+  end_date:         "2024-12-31"
+  train_split_date: "2014-12-31"
+  fred_api_key:     ""   # read from the FRED_API_KEY environment variable
+
+  tickers:
+    # Commodities (3)
+    - "CL=F"      # WTI Crude Oil future          → CL2 Comdty
+    - "GC=F"      # COMEX Gold future              → GC1 Comdty
+    - "SI=F"      # COMEX Silver future            → SI1 Comdty
+    # Equities (8 + 1 substitute)
+    - "ES=F"      # S&P 500 E-mini future          → ES1 Index
+    - "NQ=F"      # NASDAQ-100 E-mini future       → NQ1 Index
+    - "^BVSP"     # IBOVESPA index                 → BZ1 Index  (proxy)
+    - "^HSI"      # Hang Seng index                → HI1 Index  (proxy)
+    - "^N225"     # Nikkei 225 index               → NK1 Index  (proxy)
+    - "^SSMI"     # Swiss Market Index             → SM1 Index  (proxy)
+    - "^AXJO"     # ASX SPI 200 index              → XP1 Index  (proxy)
+    - "^FTSE"     # FTSE 100 index                 → Z 1 Index  (proxy)
+    - "^GDAXI"    # DAX 40 index                   → VG1 Index  (substitute Euro Stoxx)
+    # Fixed Income (2)
+    - "ZN=F"      # US 10Y T-Note future           → TY1 Comdty
+    - "XBB.TO"    # iShares Canada Bond Index ETF  → CN1 Comdty (substitute)
+
+  macro_vars:
+    # US (6)
+    GDPC1:                "US Real GDP (quarterly)"
+    INDPRO:               "US Industrial Production (monthly)"
+    RSAFS:                "US Retail Sales (monthly)"
+    CPIAUCSL:             "US CPI (monthly)"
+    PPIACO:               "US PPI All Commodities (monthly)"
+    M2SL:                 "US M2 Money Stock (monthly)"
+    # EU (5)
+    CLVMNACSCAB1GQEA19:   "EU Real GDP (quarterly)"
+    EA19PRINTO01IXOBSAM:  "EU Industrial Production (monthly)"
+    EA19SLRTTO01GPSAM:    "EU Retail Sales (monthly, growth%)"
+    CP0000EZ19M086NEST:   "EU HICP CPI (monthly)"
+    MABMM301EZM657S:      "EU M3 Broad Money growth (monthly)"
+    # CN (4)
+    XTEXVA01CNM667S:      "CN Exports growth (monthly, GDP proxy)"
+    CHNPRINTO01IXPYM:     "CN Industrial Production YoY% (monthly)"
+    CHNSLRTTO02MLM:       "CN Retail Sales (monthly)"
+    CHNCPIALLMINMEI:      "CN CPI (monthly)"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 02. PREPROCESSING
+# Same settings as the synthetic branches; only stationarity_transforms differ,
+# because the macro series are real FRED series.
+# ══════════════════════════════════════════════════════════════════════════════
+preprocessing:
+  window_length:    64     # context_len (asset past)
+  target_length:    32     # SWT-compatible: 32 = 2^5, level 4 → 5 subbands
+  # macro_context_len: PRE-TARGET-ONLY lookback. With 126 we match the MVAE
+  # 6-month momentum lag (SIXM_LAG=126 trading days). The macro window
+  # terminates the day BEFORE target start (Kubiak §4.1 compliance + no info
+  # leak from target-period CPI releases). First ~62 windows are skipped for
+  # insufficient pre-history; total windows ≈ 6113 instead of 6175.
+  macro_context_len: 126
+  stride: 1
+
+  instance_scaling:
+    c:         3.0
+    mad_floor: 1.0e-4
+    z_clip:    10.0
+
+  target_distribution:
+    mode: "optA"
+    strict_artifact_validation: true
+    optA:
+      n_quantiles:      2000
+      subsample:        200000
+      clip_percentiles: [0.25, 99.75]
+
+  wavelet:
+    type:  "haar"
+    level: 4          # 5 subbands (cA4 + cD4..cD1)
+
+  macro_scaling:
+    method:      "expanding_robust_tanh"
+    tanh_c:      6.0
+    min_periods: 20
+
+    stationarity_transforms:
+      # US — level series → YoY log growth
+      GDPC1:                "yoy_log_diff"
+      INDPRO:               "yoy_log_diff"
+      RSAFS:                "yoy_log_diff"
+      CPIAUCSL:             "yoy_log_diff"
+      PPIACO:               "yoy_log_diff"
+      M2SL:                 "yoy_log_diff"
+      # EU — same treatment; quarterly GDP interpolated in ingest.py
+      CLVMNACSCAB1GQEA19:   "yoy_log_diff"
+      EA19PRINTO01IXOBSAM:  "yoy_log_diff"
+      EA19SLRTTO01GPSAM:    "already_growth"   # FRED already in growth%
+      CP0000EZ19M086NEST:   "yoy_log_diff"
+      MABMM301EZM657S:      "already_growth"   # FRED already in growth rate
+      # CN — some already in YoY%, some need transform
+      XTEXVA01CNM667S:      "already_growth"
+      CHNPRINTO01IXPYM:     "already_growth"
+      CHNSLRTTO02MLM:       "yoy_log_diff"
+      CHNCPIALLMINMEI:      "yoy_log_diff"
+
+    engineered_features: {}
+
+  target_features:
+    - "log_returns"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 03. WALK-FORWARD SCHEDULE
+# Annual step (10 steps: 2015–2024).
+# ══════════════════════════════════════════════════════════════════════════════
+training:
+  walk_forward:
+    initial_split_date:  "2014-12-31"
+    evaluation_end_date: "2024-12-31"
+    step_freq:           "A"     # annual
+    warmup_epochs:       100     # read by train.py → passed as --wf_epochs fallback
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 05. WALK-FORWARD EVALUATION VIEWER
+# ══════════════════════════════════════════════════════════════════════════════
+analysis:
+  num_samples:      8
+  guidance_scale:   1.0
+  ddim_steps:       50
+  batch_size:       256
+  max_eval_windows: 200      # cap per step → 200×10 = 2000 OOS windows max
+
+  metrics:
+    lags: 10
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 06. COUNTERFACTUAL GENERATION — Kubiak §6.1 CPI sweep
+# Per request: select blocks across the ENTIRE OOS period (target_year_range),
+# always using the latest available checkpoint (the one that has seen all
+# training data through 2024).
+# ══════════════════════════════════════════════════════════════════════════════
+counterfactual_generation:
+  ddim_steps:             50
+  ddim_eta:               0.0
+  # CFG / SGD are now mutually exclusive (lab.py:ddim_sample assert).
+  # Clean operating point post-May-25 diagnosis: both disabled (CFG=1.0, γ=1.0)
+  # → pure conditional sampling on macro_shocked. The previous sweet spot
+  # (CFG=1.5 + γ=1.0 → γ_eff=1.5) was found to be a compensation of two
+  # distortions: CFG amplified both baseline and shocked samples vs an
+  # untrained uncond branch. With CFG off, response is naturally adequate
+  # (MagRatio ~1.5x on ES). See results/real_filmonly_ablation/counterfactual/
+  # run_20260525_123438..123524 sweep.
+  guidance_scale:         1.0
+  sgd_gamma:              1.0
+  latent_preserving:      true
+  covariance_propagation: true
+
+  cpi_sweep:
+    # Either target_year (single year) or target_year_range (start, end) inclusive.
+    # If target_year_range is present, it overrides target_year.
+    target_year_range:  [2015, 2024]
+    target_year:        2022      # used only if target_year_range is absent
+
+    focus_assets:       ["ES=F", "ZN=F"]
+    cpi_variable_index: 3         # CPIAUCSL is the 4th macro (0-indexed) in macro_vars
+
+    # Shock levels in RAW (post-stationarity) units of the CPI variable.
+    # CPIAUCSL uses yoy_log_diff → log(CPI_t / CPI_{t-252}). For small changes
+    # this is ≈ CPI YoY growth in decimal form, so:
+    #   -0.01  ≈  -1 percentage point of CPI YoY  (Kubiak Figure 2 step)
+    #   -0.06  ≈  -6 percentage points of CPI YoY (Kubiak Figure 2 endpoint)
+    # Both diffusion and MacroVAE consume the same δ_raw via Kubiak §6 pipeline:
+    # de-standardize → +δ + conditional Gaussian (raw covariance) → re-standardize.
+    shock_levels: [-0.01, -0.02, -0.03, -0.04, -0.05, -0.06]
+    shock_labels: ["-1 ppt", "-2 ppt", "-3 ppt", "-4 ppt", "-5 ppt", "-6 ppt"]
+
+  custom_scenarios:
+    enabled: false
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 06b. MACROVAE — paper-strict config (Kubiak ICAIF 2025, §3.2/§3.3/§3.4)
+# Documentation only — scripts/train_macrovae.py reads from CLI args, not this
+# section. Use the exact command in the USAGE block at the top of this file.
+# ══════════════════════════════════════════════════════════════════════════════
+macrovae:
+  hidden_dim:     128       # Section 3.4: "all ResNet blocks use 128 hidden channels"
+  latent_dim:     32        # Section 3.4: "latent dimension is set to d_z = 32"
+  cond_embed_dim: 8         # Section 3.2: "embedding e_c ∈ R^8"
+  lr:             4.0e-4    # Section 3.4: "Adam optimizer (learning rate 0.0004)"
+  batch_size:     64        # Section 3.4: "batch size 64"
+  kl_max_weight:  0.01      # Kubiak repo train.py:52
+  kl_anneal_eps:  2000      # Kubiak repo train.py:51
+  epochs_init:    2000      # Section 3.4: "train for 2000 epochs"
+  epochs_warm:    200       # Annual warm-start (paper retrains scratch per Q)
+  grad_clip:      1.0       # Section 3.4: "gradient clipping (max norm 1.0)"
+  uniform_noise_on_macro: true   # Section 3.4: "Uniform noise is added to macro inputs"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 07. GENERATION
+# ══════════════════════════════════════════════════════════════════════════════
+generation:
+  max_runs_per_task: 3
+

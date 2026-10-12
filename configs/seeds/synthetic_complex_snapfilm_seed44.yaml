@@ -1,0 +1,104 @@
+# configs/seeds/synthetic_complex_snapfilm_seed44.yaml
+# Training seed 44 of configs/synthetic_complex_snapfilm/baseline.yaml, with its own checkpoints and results.
+#
+# This file sets the folders, the data definition and the walk-forward schedule.
+# Model and training hyper-parameters are command-line flags: see docs/REPRODUCE.md.
+paths:
+  checkpoints_dir: "checkpoints/synthetic_complex_snapfilm_seed44"
+  processed_dir:   "processed_data/synthetic_complex"   # SHARED with baseline
+  results_dir:     "results/synthetic_complex_snapfilm_seed44"
+
+
+synthetic_dgp:
+  use_synthetic: true
+  variant:       "complex"
+  n_obs:         7000
+  seed:          42
+  start_date:    "1995-01-02"
+
+
+data_ingestion:
+  train_split_date: "2019-12-31"
+  tickers:
+    - "SY_EQ1"
+    - "SY_EQ2"
+    - "SY_CM1"
+    - "SY_CM2"
+    - "SY_FI1"
+    - "SY_FI2"
+  macro_vars:
+    SYNTH_CPI:    "Synthetic CPI (VAR(1), the shocked variable)"
+    SYNTH_GROWTH: "Synthetic growth (VAR(1))"
+    SYNTH_MONEY:  "Synthetic money/liquidity (VAR(1))"
+    SYNTH_RATES:  "Synthetic policy rate (VAR(1), reacts to CPI)"
+
+
+preprocessing:
+  window_length:    64
+  target_length:    32
+  macro_context_len: 126
+  stride: 1
+  instance_scaling:
+    c:         3.0
+    mad_floor: 1.0e-4
+    z_clip:    10.0
+  target_distribution:
+    mode: "optA"
+    strict_artifact_validation: true
+    optA:
+      n_quantiles:      2000
+      subsample:        200000
+      clip_percentiles: [0.25, 99.75]
+  wavelet:
+    type:  "haar"
+    level: 4
+  macro_scaling:
+    method:      "expanding_robust_tanh"
+    tanh_c:      6.0
+    min_periods: 20
+    stationarity_transforms:
+      SYNTH_CPI:    "already_growth"
+      SYNTH_GROWTH: "already_growth"
+      SYNTH_MONEY:  "already_growth"
+      SYNTH_RATES:  "already_growth"
+    engineered_features: {}
+  target_features:
+    - "log_returns"
+
+
+training:
+  walk_forward:
+    initial_split_date:  "2019-12-31"
+    evaluation_end_date: "2021-12-31"
+    step_freq:           "A"
+    warmup_epochs:       50
+
+
+analysis:
+  num_samples:      8
+  guidance_scale:   1.0
+  ddim_steps:       50
+  batch_size:       256
+  max_eval_windows: 150
+  metrics:
+    lags: 10
+
+
+counterfactual_synthetic:
+  n_windows:    2000
+  window_pool:  all        # draw from all 6812 windows (train+test); CF is in-sample
+  n_samples:    1
+  seed:         42
+  shock_deltas: [-0.015, -0.010, -0.005, 0.005, 0.010, 0.015]
+  shock_labels: ["-1.5ppt", "-1.0ppt", "-0.5ppt", "+0.5ppt", "+1.0ppt", "+1.5ppt"]
+  ddim_steps:   50
+  ddim_eta:     0.0
+  guidance_scale: 1.0
+  sgd_gamma:    1.0
+  covariance_adjust: true   # Kubiak cov-adjusted shock is now the main CF method
+  ate_samples:  1
+  ate_n_windows: 50
+
+
+generation:
+  max_runs_per_task: 3

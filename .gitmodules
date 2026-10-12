@@ -1,0 +1,3 @@
+[submodule "MacroVAE"]
+	path = MacroVAE
+	url = https://github.com/szymkubiak/macrovae.git
